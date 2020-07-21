@@ -17,3 +17,6 @@
 [submodule "deps/lua-memory"]
 	path = deps/lua-memory
 	url = https://github.com/cujoai/lua-memory.git
+[submodule "deps/luaunpack"]
+	path = deps/luaunpack
+	url = https://github.com/VictorNogueiraRio/luaunpack.git
