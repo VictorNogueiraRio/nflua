@@ -25,13 +25,13 @@
 #include <net/netns/generic.h>
 
 #include <lua.h>
+#include <luaunpack.h>
 
 #include "xt_lua.h"
 #include "nf_util.h"
 #include "netlink.h"
 #include "states.h"
 #include "kpi_compat.h"
-#include "luapacket.h"
 #include "luautil.h"
 
 MODULE_LICENSE("GPL");
@@ -81,25 +81,31 @@ static int nflua_docall(lua_State *L)
 {
 	const char *func = lua_touserdata(L, 1);
 	struct sk_buff *skb = lua_touserdata(L, 2);
-	int hooknum = lua_tointeger(L, 3);
-	int mode = lua_tointeger(L, 4);
 	int error;
+	struct tcphdr _tcph, *tcph;
+	int tcphoff;
+	int payloadlen = tcp_payload_length(skb);
+	unsigned char *data;
 
 	lua_settop(L, 0);
 
-	luapacket_new(L, skb, hooknum);
+	skb_linearize(skb);
+	tcphoff = ip_hdrlen(skb);
+	tcph = skb_header_pointer(skb, tcphoff, sizeof(_tcph), &_tcph);
+	if (unlikely(tcph == NULL)) {
+		pr_warn("Could not get TCP header.\n");
+		return -1;
+	}
+
+	data = (unsigned char *) tcph;
+	data += tcp_hdrlen(skb);
+	lunpack_newpacket(L, data, payloadlen);
 
 	if (lua_getglobal(L, func) != LUA_TFUNCTION)
 		return luaL_error(L, "couldn't find function: %s\n", func);
 
 	lua_pushvalue(L, 1);
 	error = lua_pcall(L, 1, 1, 0);
-
-	if (mode == NFLUA_TARGET && lua_isstring(L, -1) &&
-	    strcmp(lua_tostring(L, -1), "stolen") == 0)
-		luapacket_stolen(L, 1);
-	else
-		luapacket_unref(L, 1);
 
 	if (error)
 		return lua_error(L);
@@ -162,9 +168,7 @@ static union call_result nflua_call(struct sk_buff *skb,
 	lua_pushcfunction(L, nflua_docall);
 	lua_pushlightuserdata(L, (void *)info->func);
 	lua_pushlightuserdata(L, skb);
-	lua_pushinteger(L, kpi_xt_hooknum(par));
-	lua_pushinteger(L, mode);
-	if (luaU_pcall(L, 4, 1)) {
+	if (luaU_pcall(L, 2, 1)) {
 		pr_err("%s\n", lua_tostring(L, -1));
 		goto cleanup;
 	}
